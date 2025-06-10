@@ -415,6 +415,11 @@
  * @type skill
  * @default 0
  * 
+ * @param Update Functions
+ * @desc Execute these scripts per update
+ * @type note[]
+ * @default []
+ * 
  */
 
 function ANIM_GFX_PARSER_RHYTHM(obj){
@@ -494,6 +499,17 @@ function BUTTON_RAIL_PARSER_RHYTHM(obj){
             obj['Spawn Times'] = JSON.parse(obj['Spawn Times']);
         }catch(e){
             obj['Spawn Times'] = [];
+        }
+        try{
+            obj['Update Functions'] = JSON.parse(obj['Update Functions']).map((func)=>{
+                try{
+                    return JSON.parse(func);
+                }catch(e){
+                    return;
+                }
+            }).filter(Boolean)
+        }catch(e){
+            obj['Update Functions'] = [];
         }
         return obj;
     }catch(e){
@@ -861,7 +877,7 @@ SpriteRhythm_GameButton.prototype.updateHoldGfx = function(){
     bitmap.clear();
     const bw = hold_per_frame * this._max_hold * ratio;
     const bh = this.height * 0.5;
-    sprite.y = bh;
+    sprite.y = bh * 1.5;
     if(!this._hold_resize){
         if(isNaN(this._rfsh))this._rfsh = 0;
         sprite.bitmap = new Bitmap(hold_per_frame * this._max_hold, bh || 16);
@@ -900,8 +916,6 @@ SpriteRhythm_GameRail.prototype.confirmButton = function(){
     if(button){
         const data = button._data
         const trigger_only = eval(data['Trigger Only']);
-        const max_hld_dur = button._max_hold;
-        console.log(max_hld_dur)
         const game_config = $gameTemp.rhythmGame();
         const trigger_score = eval(game_config['Button Score']) || 0;
         const sounds = game_config['Sound Popup'];
@@ -1144,6 +1158,7 @@ SpriteRhythm_GameRail.prototype.update = function(){
     this.updateButtonPositions();
     this.updateInput();
     this.updateHolding();
+    this.updateFunctions();
 }
 
 SpriteRhythm_GameRail.prototype.updateForegroundPosition = function(){
@@ -1197,6 +1212,18 @@ SpriteRhythm_GameRail.prototype.updateHolding = function(){
     }else{
         this._holding = 0;
     }
+}
+
+SpriteRhythm_GameRail.prototype.updateFunctions = function(){
+    const data = this._data;
+    const update_functions = data['Update Functions'];
+    update_functions.forEach((func)=>{
+        try{
+            eval(func);
+        }catch(e){
+            console.error(e);
+        }
+    })
 }
 
 function SpriteRhythm_Score(){
