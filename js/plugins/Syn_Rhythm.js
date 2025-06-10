@@ -228,6 +228,18 @@
  * @type struct<buttonSpawn>[]
  * @default []
  * 
+ * @param Button Score
+ * @parent Button Spawn
+ * @desc Score on triggering button
+ * @type text
+ * @default 100
+ * 
+ * @param Button Hold Score
+ * @parent Button Spawn
+ * @desc Max Score for holding button
+ * @type text
+ * @default 100
+ * 
  */
 /*~struct~animGfx:
  * 
@@ -301,6 +313,11 @@
  * @option pageup
  * @option pagedown
  * @default ok
+ * 
+ * @param Trigger Only
+ * @desc Ignores holding time and score
+ * @type boolean
+ * @default false
  * 
  * @param Spawn Time
  * @desc Time at which to spawn button
@@ -793,6 +810,7 @@ SpriteRhythm_GameButton.prototype.setupData = function(data){
 }
 
 SpriteRhythm_GameButton.prototype.createHoldSprite = function(){
+    const data = this._data;
     const hold_per_frame = eval(Syn_Rhythm.HOLD_PER_FRAME);
     this._max_hold = JsonEx.makeDeepCopy(this._hold_time);
     const bw = hold_per_frame * this._max_hold;
@@ -802,7 +820,9 @@ SpriteRhythm_GameButton.prototype.createHoldSprite = function(){
     sprite.y = bh * -0.5;
     sprite.bitmap = new Bitmap(bw, bh);
     sprite.bitmap.fillRect(0,0,bw,bh,Syn_Rhythm.HOLD_COLOR);
-    this.addChild(sprite);
+    if(!eval(data['Trigger Only'])){
+        this.addChild(sprite);
+    }
     this._hold_sprite = sprite;
 }
 
@@ -878,7 +898,12 @@ SpriteRhythm_GameRail.prototype.confirmButton = function(){
     }
     const button = buttons.shift();
     if(button){
+        const data = button._data
+        const trigger_only = eval(data['Trigger Only']);
+        const max_hld_dur = button._max_hold;
+        console.log(max_hld_dur)
         const game_config = $gameTemp.rhythmGame();
+        const trigger_score = eval(game_config['Button Score']) || 0;
         const sounds = game_config['Sound Popup'];
         const bad_sounds = sounds['Bad Popup'];
         const good_sounds = sounds['Good Popup'];
@@ -896,7 +921,7 @@ SpriteRhythm_GameRail.prototype.confirmButton = function(){
             (bx + bw) <= (fg_x + fg_w) &&
             bx >= fg_x
         ){
-            const new_value = old_value + 99;
+            const new_value = old_value + trigger_score;
             $gameVariables.setValue(score_var_id, new_value);
             if(perfect_sounds.length > 0){
                 const se_index = Math.randomInt(perfect_sounds.length);
@@ -908,8 +933,14 @@ SpriteRhythm_GameRail.prototype.confirmButton = function(){
             }else{
                 SoundManager.playOk();
             }
-            this._held_button = button;
-            skill_scale = 99;
+            if(!trigger_only){
+                this._held_button = button;
+                this._hold_scale = 1;
+            }else{
+                this._is_triggered = false;
+                this.executeSkill(100);
+                button.removeButton();
+            }
         }else if(
             (
                 (bx + bw) < fg_x ||
@@ -940,6 +971,7 @@ SpriteRhythm_GameRail.prototype.confirmButton = function(){
             ){
                 const sep = fg_x - bx;
                 const score_ratio = 1 - (sep / fg_w);
+                console.log(score_ratio)
                 const score_bonus = Math.min(99, Math.floor(Math.abs(99 * score_ratio)));
                 const new_value = old_value + score_bonus;
                 $gameVariables.setValue(score_var_id, new_value);
@@ -953,24 +985,37 @@ SpriteRhythm_GameRail.prototype.confirmButton = function(){
                 }else{
                     SoundManager.playOk();
                 }
-                this._held_button = button;
-                skill_scale = score_bonus;
+                if(!trigger_only){
+                    this._held_button = button;
+                    this._hold_scale = score_ratio;
+                }else{
+                    this._is_triggered = false;
+                    this.executeSkill(100 * score_ratio);
+                    button.removeButton();
+                }
             }else if(
                 bx >= fg_x &&
                 (bx + bw) > (fg_x + fg_w)
             ){
                 const sep = (bx + bw) - (fg_x + fg_w);
                 const score_ratio = 1 - (sep / fg_w);
+                console.log(score_ratio)
                 const score_bonus = Math.min(99, Math.floor(Math.abs(99 * score_ratio)));
                 const new_value = old_value + score_bonus;
                 $gameVariables.setValue(score_var_id, new_value);
                 SoundManager.playOk();
-                this._held_button = button;
-                skill_scale = score_bonus;
+                if(!trigger_only){
+                    this._held_button = button;
+                    this._hold_scale = score_ratio;
+                }else{
+                    this._is_triggered = false;
+                    this.executeSkill(100 * score_ratio);
+                    button.removeButton();
+                }
             }
         }
         if(this._held_button && $gameTemp.rhythmBattler()){
-            this._skill_scale = skill_scale;
+            this._skill_scale = this._hold_scale;
         }
     }
 }
@@ -1009,11 +1054,14 @@ SpriteRhythm_GameRail.prototype.releaseButton = function(){
     if(!held_button){
         this._held_button = null;
         this._holding = 0;
+        this._hold_scale = 0;
         return;
     }
-    let scale = this._skill_scale;
+    const score_ratio = this._hold_scale;
     if(!held_button._destroyed){
         const game_config = $gameTemp.rhythmGame();
+        const hold_score = eval(game_config['Button Hold Score']);
+        const max_score = Math.round(hold_score * score_ratio);
         const input_buffer = eval(game_config['Input Buffer']) || 0;
         const btn_data = held_button._data;
         const max_hold_time = eval(btn_data['Hold Time']) || 1;
@@ -1023,20 +1071,26 @@ SpriteRhythm_GameRail.prototype.releaseButton = function(){
             (
                 hold_time + input_buffer <= max_hold_time &&
                 hold_time > max_hold_time
+            ) ||
+            (
+                hold_time > max_hold_time &&
+                hold_time - input_buffer <= max_hold_time
             )
         ){
-            const new_value = Math.max(0, (old_value + max_hold_time))
+            const new_value = Math.max(0, (old_value + max_score))
             $gameVariables.setValue(score_var_id, new_value);
-            scale + 1;
         }else{
-            const hold_score = Math.min(max_hold_time, Math.max(0, (max_hold_time + input_buffer) - hold_time));
-            const new_value = Math.max(0, old_value + hold_score);
+            let ratio = hold_time / max_hold_time;
+            if(ratio > 1){
+                ratio = 1 - (ratio.mod(1));
+            }
+            const score = Math.round(max_score * ratio);
+            const new_value = Math.max(0, old_value + score);
             $gameVariables.setValue(score_var_id, new_value);
-            scale + hold_score;
         }
         held_button.removeButton();
     }
-    this.executeSkill(scale);
+    this.executeSkill(Math.round(100 * score_ratio));
     this._held_button = null;
     this._holding = 0;
 }
@@ -1340,6 +1394,7 @@ SpriteRhythm_Controller.prototype.updateEnd = function(){
             const rails = this._button_rails;
             if(
                 !rails.some((rail)=>{
+                    if(rail._held_button)return true;
                     return rail._buttons.length > 0;
                 })
             ){
