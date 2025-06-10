@@ -14,10 +14,27 @@
  * @help
  * Set the game parameters in the plugin parameters
  * 
+ * @param Do Not Destroy
+ * @desc Prevents button JS destruction
+ * Useful for MV users
+ * @type boolean
+ * @default false
+ * 
  * @param Game Configurations
  * @desc Setup rhythm games
  * @type struct<gameConfig>[]
  * @default []
+ * 
+ * @param Hold Length Per Frame
+ * @desc Set the draw length per hold frame
+ * Value is pixels per frame
+ * @type text
+ * @default 3
+ * 
+ * @param Hold Color
+ * @desc Set the color for holding
+ * @type text
+ * @default #0000ff
  * 
  * @param Button Configurations
  * @desc Setup game buttons here
@@ -107,6 +124,54 @@
  * @default 3
  * 
  */
+/*~struct~audioSe:
+ * 
+ * @param name
+ * @text Name
+ * @desc Select audio se file
+ * @type file
+ * @dir audio/se/
+ * 
+ * @param volume
+ * @text Volume
+ * @desc Loudness
+ * @type text
+ * @default 90
+ * 
+ * @param pitch
+ * @text Pitch
+ * @desc Tone
+ * @type text
+ * @default 100
+ * 
+ * @param pan
+ * @text Pan
+ * @desc Balance
+ * @type text
+ * @default 0
+ * 
+ */
+/*~struct~popupSe:
+ * 
+ * @param Bad Popup
+ * @desc Play sound effect if bad input
+ * Selects at random if multiple
+ * @type struct<audioSe>[]
+ * @default []
+ * 
+ * @param Good Popup
+ * @desc Play sound effect if good input
+ * Selects at random if multiple
+ * @type struct<audioSe>[]
+ * @default []
+ * 
+ * @param Perfect Popup
+ * @desc Play sound effect if perfect input
+ * Selects at random if multiple
+ * @type struct<audioSe>[]
+ * @default []
+ * 
+ */
 /*~struct~gameConfig:
  * 
  * @param Name
@@ -137,6 +202,10 @@
  * @desc Setup custom BGM to play during game
  * Ignores duration if set
  * @type struct<musicBGM>
+ * 
+ * @param Sound Popup
+ * @desc Play sound based on input timing
+ * @type struct<popupSe>
  * 
  * @param Game Speed
  * @desc How fast buttons move towards target area
@@ -358,6 +427,49 @@ function BGM_PARSER_RHYTHM(obj){
     }
 }
 
+function SE_PARSER_RHYTHM(obj){
+    try{
+        obj = JSON.parse(obj);
+        return obj;
+    }catch(e){
+        return;
+    }
+}
+
+function SOUND_POPUPS_PARSER_RHYTHM(obj){
+    try{
+        obj = JSON.parse(obj);
+        try{
+            obj['Bad Popup'] = JSON.parse(obj['Bad Popup']).map((config)=>{
+                return SE_PARSER_RHYTHM(config);
+            }).filter(Boolean);
+        }catch(e){
+            obj['Bad Popup'] = [];
+        }
+        try{
+            obj['Good Popup'] = JSON.parse(obj['Good Popup']).map((config)=>{
+                return SE_PARSER_RHYTHM(config);
+            }).filter(Boolean);
+        }catch(e){
+            obj['Good Popup'] = [];
+        }
+        try{
+            obj['Perfect Popup'] = JSON.parse(obj['Perfect Popup']).map((config)=>{
+                return SE_PARSER_RHYTHM(config);
+            }).filter(Boolean);
+        }catch(e){
+            obj['Perfect Popup'] = [];
+        }
+        return obj;
+    }catch(e){
+        const obj = {};
+        obj['Bad Popup'] = [];
+        obj['Good Popup'] = [];
+        obj['Perfect Popup'] = [];
+        return obj;
+    }
+}
+
 function BUTTON_RAIL_PARSER_RHYTHM(obj){
     try{
         obj = JSON.parse(obj);
@@ -387,6 +499,7 @@ function GAME_PARSER_RHYTHM(obj){
         obj = JSON.parse(obj)
         obj['Score Sprite Configuration'] = SCORE_SPRITE_PARSER_RHYTHM(obj['Score Sprite Configuration']);
         obj['BGM'] = BGM_PARSER_RHYTHM(obj['BGM']);
+        obj['Sound Popup'] = SOUND_POPUPS_PARSER_RHYTHM(obj['Sound Popup']);
         try{
             obj['Button Rails'] = JSON.parse(obj['Button Rails']).map((config)=>{
                 return BUTTON_RAIL_PARSER_RHYTHM(config);
@@ -438,6 +551,9 @@ function SKILL_PARSER_RHYTHM(obj){
 const Syn_Rhythm = {};
 Syn_Rhythm.Plugin = PluginManager.parameters(`Syn_Rhythm`);
 Syn_Rhythm.SCORE_VAR_ID = eval(Syn_Rhythm.Plugin['Score Variable']);
+Syn_Rhythm.HOLD_PER_FRAME = Syn_Rhythm.Plugin['Hold Length Per Frame'];
+Syn_Rhythm.HOLD_COLOR = Syn_Rhythm.Plugin['Hold Color'];
+Syn_Rhythm.DO_NOT_DESTROY_BUTTON = eval(Syn_Rhythm.Plugin['Do Not Destroy']);
 
 try{
     Syn_Rhythm.GAME_CONFIGURATIONS = JSON.parse(Syn_Rhythm.Plugin['Game Configurations']).map((config)=>{
@@ -568,6 +684,8 @@ SpriteRhythm_AnimGfx.prototype.setGfx = function(gfx_obj){
         const x = eval(gfx_obj['Offset X']) || 0;
         const y = eval(gfx_obj['Offset Y']) || 0;
         this.move(x, y);
+    }else{
+        this.bitmap = null;
     }
     this._frame_update = 0;
     this._cur_frame = 0;
@@ -627,6 +745,7 @@ SpriteRhythm_GameButton.prototype.constructor = SpriteRhythm_GameButton;
 SpriteRhythm_GameButton.prototype.initialize = function(data){
     Sprite.prototype.initialize.call(this);
     this.setupData(data);
+    this.createHoldSprite();
 }
 
 SpriteRhythm_GameButton.prototype.inValidArea = function(){
@@ -673,17 +792,36 @@ SpriteRhythm_GameButton.prototype.setupData = function(data){
     this.setGfx(gfx);
 }
 
+SpriteRhythm_GameButton.prototype.createHoldSprite = function(){
+    const hold_per_frame = eval(Syn_Rhythm.HOLD_PER_FRAME);
+    this._max_hold = JsonEx.makeDeepCopy(this._hold_time);
+    const bw = hold_per_frame * this._max_hold;
+    const bh = this.height * 0.5;
+    const sprite = new Sprite();
+    sprite.rotation = Math.PI;
+    sprite.y = bh * -0.5;
+    sprite.bitmap = new Bitmap(bw, bh);
+    sprite.bitmap.fillRect(0,0,bw,bh,Syn_Rhythm.HOLD_COLOR);
+    this.addChild(sprite);
+    this._hold_sprite = sprite;
+}
+
 SpriteRhythm_GameButton.prototype.removeButton = function(){
     if(this.parent){
         this.parent.destroyButton(this);
     }
-    if(this.destroy)this.destroy();
+    if(!Syn_Rhythm.DO_NOT_DESTROY_BUTTON){
+        if(this.destroy)this.destroy();
+    }else{
+        this.setGfx(null)
+    }
     delete this;
 }
 
 SpriteRhythm_GameButton.prototype.update = function(){
     SpriteRhythm_AnimGfx.prototype.update.call(this, ...arguments);
     this.updatePressed();
+    this.updateHoldGfx();
 }
 
 SpriteRhythm_GameButton.prototype.updatePressed = function(){
@@ -691,6 +829,28 @@ SpriteRhythm_GameButton.prototype.updatePressed = function(){
     if(this.isButtonPressed()){
         this._hold_time--;
     }
+}
+
+SpriteRhythm_GameButton.prototype.updateHoldGfx = function(){
+    const cur_time = this._hold_time;
+    const max_time = this._max_hold;
+    const ratio = (cur_time/max_time).clamp(0, 1);
+    const hold_per_frame = eval(Syn_Rhythm.HOLD_PER_FRAME);
+    const sprite = this._hold_sprite;
+    const bitmap = sprite.bitmap;
+    bitmap.clear();
+    const bw = hold_per_frame * this._max_hold * ratio;
+    const bh = this.height * 0.5;
+    sprite.y = bh;
+    if(!this._hold_resize){
+        if(isNaN(this._rfsh))this._rfsh = 0;
+        sprite.bitmap = new Bitmap(hold_per_frame * this._max_hold, bh || 16);
+        this._rfsh++;
+        if(this._rfsh > 6){
+            this._hold_resize = true;
+        }
+    }
+    bitmap.fillRect(0, 0, bw, bh, Syn_Rhythm.HOLD_COLOR);
 }
 
 function SpriteRhythm_GameRail(){
@@ -705,6 +865,7 @@ SpriteRhythm_GameRail.prototype.initialize = function(data){
     this._buttons = [];
     this.createForeground();
     this.setupData(data);
+    Input.clear();
 }
 
 SpriteRhythm_GameRail.prototype.confirmButton = function(){
@@ -717,6 +878,11 @@ SpriteRhythm_GameRail.prototype.confirmButton = function(){
     }
     const button = buttons.shift();
     if(button){
+        const game_config = $gameTemp.rhythmGame();
+        const sounds = game_config['Sound Popup'];
+        const bad_sounds = sounds['Bad Popup'];
+        const good_sounds = sounds['Good Popup'];
+        const perfect_sounds = sounds['Perfect Popup'];
         let skill_scale = 0;
         this._holding = 1;
         const bx = button.x;
@@ -732,7 +898,16 @@ SpriteRhythm_GameRail.prototype.confirmButton = function(){
         ){
             const new_value = old_value + 99;
             $gameVariables.setValue(score_var_id, new_value);
-            SoundManager.playOk();
+            if(perfect_sounds.length > 0){
+                const se_index = Math.randomInt(perfect_sounds.length);
+                const sound = perfect_sounds[se_index];
+                sound.volume = eval(sound.volume);
+                sound.pitch = eval(sound.pitch);
+                sound.pan = eval(sound.pan);
+                AudioManager.playSe(sound);
+            }else{
+                SoundManager.playOk();
+            }
             this._held_button = button;
             skill_scale = 99;
         }else if(
@@ -747,7 +922,16 @@ SpriteRhythm_GameRail.prototype.confirmButton = function(){
         ){
             this._is_triggered = false;
             this.executeSkill(0);
-            SoundManager.playBuzzer();
+            if(bad_sounds.length > 0){
+                const se_index = Math.randomInt(bad_sounds.length);
+                const sound = bad_sounds[se_index];
+                sound.volume = eval(sound.volume);
+                sound.pitch = eval(sound.pitch);
+                sound.pan = eval(sound.pan);
+                AudioManager.playSe(sound);
+            }else{
+                SoundManager.playBuzzer();
+            }
             button.removeButton();
         }else{
             if(
@@ -759,7 +943,16 @@ SpriteRhythm_GameRail.prototype.confirmButton = function(){
                 const score_bonus = Math.min(99, Math.floor(Math.abs(99 * score_ratio)));
                 const new_value = old_value + score_bonus;
                 $gameVariables.setValue(score_var_id, new_value);
-                SoundManager.playOk();
+                if(good_sounds.length > 0){
+                    const se_index = Math.randomInt(good_sounds.length);
+                    const sound = good_sounds[se_index];
+                    sound.volume = eval(sound.volume);
+                    sound.pitch = eval(sound.pitch);
+                    sound.pan = eval(sound.pan);
+                    AudioManager.playSe(sound);
+                }else{
+                    SoundManager.playOk();
+                }
                 this._held_button = button;
                 skill_scale = score_bonus;
             }else if(
@@ -944,6 +1137,7 @@ SpriteRhythm_GameRail.prototype.updateInput = function(){
 
 SpriteRhythm_GameRail.prototype.updateHolding = function(){
     if(this._held_button){
+        this._held_button._active = true;
         if(isNaN(this._holding))this._holding = 1;
         this._holding++;
     }else{
@@ -1136,23 +1330,7 @@ SpriteRhythm_Controller.prototype.updateSpawn = function(){
     }
 }
 
-SpriteRhythm_Controller.prototype.updateInput = function(){
-    // const rails = this._button_rails;
-    // if(Input.isPressed('ok')){
-    //     const rail = rails.find((rail_sprite)=>{
-    //         const data = rail_sprite._data;
-    //         return data['Button'] == 'ok';
-    //     })
-    //     if(rail){}
-    // }
-    // if(Input.isPressed('cancel')){}
-    // if(Input.isPressed('up')){}
-    // if(Input.isPressed('down')){}
-    // if(Input.isPressed('left')){}
-    // if(Input.isPressed('right')){}
-    // if(Input.isPressed('pageup')){}
-    // if(Input.isPressed('pagedown')){}
-}
+SpriteRhythm_Controller.prototype.updateInput = function(){}
 
 SpriteRhythm_Controller.prototype.updateEnd = function(){
     if(!this._ended){
