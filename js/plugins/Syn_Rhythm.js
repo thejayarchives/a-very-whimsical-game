@@ -1,6 +1,6 @@
 /*:
  * @author Synrec/Kylestclr
- * @plugindesc v1.0 A Rhythm game creator
+ * @plugindesc v1.1 A Rhythm game creator
  * @target MZ
  * 
  * @command Start Rhythm
@@ -17,6 +17,12 @@
  * @param Do Not Destroy
  * @desc Prevents button JS destruction
  * Useful for MV users
+ * @type boolean
+ * @default false
+ * 
+ * @param Keep Project Alive
+ * @desc Prevents the game from going inactive when
+ * project window not active
  * @type boolean
  * @default false
  * 
@@ -172,6 +178,70 @@
  * @default []
  * 
  */
+/*~struct~autoRailSetup:
+ * 
+ * @param Name
+ * @desc No function
+ * @type text
+ * @default Auto Rail
+ * 
+ * @param Rail Input
+ * @desc The rail input to consider
+ * @type select
+ * @option ok
+ * @option cancel
+ * @option up
+ * @option down
+ * @option left
+ * @option right
+ * @option pageup
+ * @option pagedown
+ * @default ok
+ * 
+ * @param Start Index
+ * @desc The start to check
+ * @type text
+ * @default 0
+ * 
+ * @param End Index
+ * @desc The end to stop check at
+ * @type text
+ * @default Infinity
+ * 
+ */
+/*~struct~autoVisualizer:
+ * 
+ * @param Screen X
+ * @desc Start position on screen
+ * @type text
+ * @default 0
+ * 
+ * @param Screen Y
+ * @desc Start position on screen
+ * @type text
+ * @default 0
+ * 
+ * @param Bar Width
+ * @desc The width of the bar
+ * @type text
+ * @default 2
+ * 
+ * @param Scale X
+ * @desc How much to scale by
+ * @type text
+ * @default 1
+ * 
+ * @param Scale Y
+ * @desc How much to scale by
+ * @type text
+ * @default 1
+ * 
+ * @param Color
+ * @desc The bar hex color
+ * Leave empty for random
+ * @type text
+ * 
+ */
 /*~struct~gameConfig:
  * 
  * @param Name
@@ -239,6 +309,70 @@
  * @desc Max Score for holding button
  * @type text
  * @default 100
+ * 
+ * @param Auto Setup
+ * @desc Automatically spawns buttons based on
+ * audio
+ * @type boolean
+ * @default false
+ * 
+ * @param Auto Visualizer
+ * @parent Auto Setup
+ * @desc A visualizer of the BGM
+ * Leave parameter empty to  disable
+ * @type struct<autoVisualizer>
+ * 
+ * @param Auto FFT
+ * @parent Auto Setup
+ * @desc Fast Fourier Transformvalue for auto bgm
+ * @type number
+ * @min 32
+ * @max 32768
+ * @default 2048
+ * 
+ * @param Auto Rail Setup
+ * @parent Auto Setup
+ * @desc Determine consideration points for rails
+ * Determine wave amplitude index to start and end
+ * @type struct<autoRailSetup>[]
+ * @default[]
+ * 
+ * @param Auto Spawn Cooldown
+ * @parent Auto Setup
+ * @desc Add a cooldown for button spawn
+ * @type text
+ * @default 48
+ * 
+ * @param Auto Threshold
+ * @parent Auto Setup
+ * @desc The Audio wave threshold value to begin check
+ * @type text
+ * @default 80
+ * 
+ * @param Auto Trigger Threshold
+ * @parent Auto Setup
+ * @desc The press time needed for a trigger button
+ * @type text
+ * @default 6
+ * 
+ * @param Auto Press Threshold
+ * @parent Auto Setup
+ * @desc The press time needed for a hold button
+ * @type text
+ * @default 60
+ * 
+ * @param Auto Shift Spawn
+ * @parent Auto Setup
+ * @desc Ignores autospawn thresholds above in favour
+ * of a "smart" system. May fail.
+ * @type boolean
+ * @default false
+ * 
+ * @param Auto Shift Decay
+ * @parent Auto Shift Spawn
+ * @desc Controls rate of threshold check decay
+ * @type text
+ * @default 1
  * 
  */
 /*~struct~animGfx:
@@ -527,6 +661,24 @@ function SCORE_SPRITE_PARSER_RHYTHM(obj){
     }
 }
 
+function AUTO_RAIL_PARSER_RHYTHM(obj){
+    try{
+        obj = JSON.parse(obj);
+        return obj;
+    }catch(e){
+        return;
+    }
+}
+
+function AUTO_VISUALIZER_PARSER_RHYTHM(obj){
+    try{
+        obj = JSON.parse(obj);
+        return obj;
+    }catch(e){
+        return;
+    }
+}
+
 function GAME_PARSER_RHYTHM(obj){
     try{
         obj = JSON.parse(obj)
@@ -546,6 +698,14 @@ function GAME_PARSER_RHYTHM(obj){
             }).filter(Boolean)
         }catch(e){
             obj['Button Spawn'] = [];
+        }
+        obj['Auto Visualizer'] = AUTO_VISUALIZER_PARSER_RHYTHM(obj['Auto Visualizer']);
+        try{
+            obj['Auto Rail Setup'] = JSON.parse(obj['Auto Rail Setup']).map((config)=>{
+                return AUTO_RAIL_PARSER_RHYTHM(config);
+            }).filter(Boolean)
+        }catch(e){
+            obj['Auto Rail Setup'] = [];
         }
         return obj;
     }catch(e){
@@ -587,6 +747,7 @@ Syn_Rhythm.SCORE_VAR_ID = eval(Syn_Rhythm.Plugin['Score Variable']);
 Syn_Rhythm.HOLD_PER_FRAME = Syn_Rhythm.Plugin['Hold Length Per Frame'];
 Syn_Rhythm.HOLD_COLOR = Syn_Rhythm.Plugin['Hold Color'];
 Syn_Rhythm.DO_NOT_DESTROY_BUTTON = eval(Syn_Rhythm.Plugin['Do Not Destroy']);
+Syn_Rhythm.KEEP_ALIVE = eval(Syn_Rhythm.Plugin['Keep Project Alive']);
 
 try{
     Syn_Rhythm.GAME_CONFIGURATIONS = JSON.parse(Syn_Rhythm.Plugin['Game Configurations']).map((config)=>{
@@ -618,6 +779,14 @@ if(Utils.RPGMAKER_NAME == "MZ"){
         if(!id)return;
         $gameTemp.startRhythmGame(id);
     })
+}
+
+Syn_Rhythm_ScnMngr_IsGmActv = SceneManager.isGameActive;
+SceneManager.isGameActive = function() {
+    if(Syn_Rhythm.KEEP_ALIVE){
+        return true;
+    }
+    return Syn_Rhythm_ScnMngr_IsGmActv.call(this, ...arguments);
 }
 
 Syn_Rhythm_BattMngr_IsBusy = BattleManager.isBusy;
@@ -985,7 +1154,6 @@ SpriteRhythm_GameRail.prototype.confirmButton = function(){
             ){
                 const sep = fg_x - bx;
                 const score_ratio = 1 - (sep / fg_w);
-                console.log(score_ratio)
                 const score_bonus = Math.min(99, Math.floor(Math.abs(99 * score_ratio)));
                 const new_value = old_value + score_bonus;
                 $gameVariables.setValue(score_var_id, new_value);
@@ -1013,7 +1181,6 @@ SpriteRhythm_GameRail.prototype.confirmButton = function(){
             ){
                 const sep = (bx + bw) - (fg_x + fg_w);
                 const score_ratio = 1 - (sep / fg_w);
-                console.log(score_ratio)
                 const score_bonus = Math.min(99, Math.floor(Math.abs(99 * score_ratio)));
                 const new_value = old_value + score_bonus;
                 $gameVariables.setValue(score_var_id, new_value);
@@ -1226,6 +1393,77 @@ SpriteRhythm_GameRail.prototype.updateFunctions = function(){
     })
 }
 
+function SpriteRhythm_Visualizer(){
+    this.initialize(...arguments);
+}
+
+SpriteRhythm_Visualizer.prototype = Object.create(Sprite.prototype);
+SpriteRhythm_Visualizer.prototype.constructor = SpriteRhythm_Visualizer;
+
+SpriteRhythm_Visualizer.prototype.initialize = function(){
+    Sprite.prototype.initialize.call(this);
+    const game_config = $gameTemp.rhythmGame();
+    const data = game_config['Auto Visualizer'];
+    const x = eval(data['Screen X']) || 0;
+    const y = eval(data['Screen Y']) || 0;
+    this.move(x, y);
+    this.scale.x = eval(data['Scale X']);
+    this.scale.y = eval(data['Scale Y']);
+    this._fixed_color = data['Color'];
+    this._data = data;
+    this.bitmap = new Bitmap(Graphics.width, Graphics.height);
+    // this.anchor.x = 0.5;
+    // this.anchor.y = 1;
+}
+
+SpriteRhythm_Visualizer.prototype.generateRandomColor = function(){
+    const r = Math.randomInt(32).toString(16).padZero(2)
+    const g = Math.randomInt(32).toString(16).padZero(2)
+    const b = Math.randomInt(32).toString(16).padZero(2)
+    const color = this._saved_color || `#${r}${g}${b}`;
+    if(!this._saved_color){
+        this._saved_color = color;
+        this._color_cooldown = 30;
+    }else{
+        this._color_cooldown--;
+        if(this._color_cooldown <= 0){
+            this._saved_color = null;
+        }
+    }
+    return color;
+}
+
+SpriteRhythm_Visualizer.prototype.update = function(){
+    Sprite.prototype.update.call(this, ...arguments);
+    this.updateDisplayAnalyzer();
+    this.updateDraw();
+}
+
+SpriteRhythm_Visualizer.prototype.updateDisplayAnalyzer = function(){
+    const controller = this.parent;
+    if(!controller)return;
+    const analyzer = controller._display_analyzer;
+    const buffer_length = analyzer.frequencyBinCount;
+    const data_array = new Uint8Array(buffer_length);
+    analyzer.getByteFrequencyData(data_array);
+    this._data_array = data_array;
+}
+
+SpriteRhythm_Visualizer.prototype.updateDraw = function(){
+    const visualizer_settings = this._data;
+    const display_array = this._data_array;
+    const display = this.bitmap;
+    display.clear();
+    const w = eval(visualizer_settings['Bar Width']);
+    const color = visualizer_settings['Color'] || this.generateRandomColor();
+    for(let i = 0; i < display_array.length; i++){
+        const mag = display_array[i];
+        const x = w * i;
+        const y = 0;
+        display.fillRect(x, y, w, mag, color);
+    }
+}
+
 function SpriteRhythm_Score(){
     this.initialize(...arguments);
 }
@@ -1319,6 +1557,7 @@ SpriteRhythm_Controller.prototype.initialize = function(){
     $gameVariables.setValue(Syn_Rhythm.SCORE_VAR_ID, 0);
     this._game_time = 0;
     this.createRails();
+    this.createAutoVisualizer();
     this.createScore();
     this.startBGM();
     Input.clear();
@@ -1337,10 +1576,66 @@ SpriteRhythm_Controller.prototype.createRails = function(){
     this._button_rails = rails;
 }
 
+SpriteRhythm_Controller.prototype.createAutoVisualizer = function(){
+    const game_config = $gameTemp.rhythmGame();
+    if(!game_config['Auto Visualizer'])return;
+    const visualizer = new SpriteRhythm_Visualizer();
+    this.addChild(visualizer);
+}
+
 SpriteRhythm_Controller.prototype.createScore = function(){
     const score = new SpriteRhythm_Score();
     this.addChild(score);
     this._score = score;
+}
+
+SpriteRhythm_Controller.prototype.calculateAutoSpawnSeparation = function(){
+    const game_config = $gameTemp.rhythmGame();
+    let rail_width = 0;
+    this._button_rails.forEach((rail)=>{
+        const w = rail.width;
+        rail_width += w;
+    })
+    rail_width /= this._button_rails.length;
+    rail_width = parseInt(rail_width);
+    const spd = Math.max(1, eval(game_config['Game Speed']));
+    const delay = rail_width / spd;
+    return Math.round(delay);
+}
+
+SpriteRhythm_Controller.prototype.getControlAutoBGM = function(){
+    const game_config = $gameTemp.rhythmGame();
+    const bgm = game_config['BGM'];
+    const bgm_name = bgm.name;
+    const bgm_file_ext = AudioManager.audioFileExt();
+    const source_file = `./audio/bgm/${bgm_name}${bgm_file_ext}`;
+    const audio = new Audio(source_file);
+    audio.loop = true;
+    const audio_context = new (window.AudioContext || window.webkitAudioContext)();
+    const source = audio_context.createMediaElementSource(audio);
+    const analyzer = audio_context.createAnalyser();
+    analyzer.fftSize = (eval(game_config['Auto FFT']) || 2048).clamp(32, 32768);
+    source.connect(analyzer);
+    audio.play();
+    return analyzer;
+}
+
+SpriteRhythm_Controller.prototype.getAutoBGM = function(){
+    const game_config = $gameTemp.rhythmGame();
+    const bgm = game_config['BGM'];
+    const bgm_name = bgm.name;
+    const bgm_file_ext = AudioManager.audioFileExt();
+    const source_file = `./audio/bgm/${bgm_name}${bgm_file_ext}`;
+    const audio = new Audio(source_file);
+    audio.loop = true;
+    const audio_context = new (window.AudioContext || window.webkitAudioContext)();
+    const source = audio_context.createMediaElementSource(audio);
+    const analyzer = audio_context.createAnalyser();
+    analyzer.fftSize = (eval(game_config['Auto FFT']) || 2048).clamp(32, 32768);
+    source.connect(analyzer);
+    analyzer.connect(audio_context.destination);
+    this._display_analyzer = analyzer;
+    return audio;
 }
 
 SpriteRhythm_Controller.prototype.startBGM = function(){
@@ -1352,11 +1647,21 @@ SpriteRhythm_Controller.prototype.startBGM = function(){
     }
     this._saved_bgm = AudioManager.saveBgm();
     this._saved_bgs = AudioManager.saveBgs();
-    const buffer = AudioManager.createBuffer("bgm/", bgm.name);
-    AudioManager.updateBgmParameters(bgm);
-    buffer.play(true, 0);
-    AudioManager.fadeOutBgm(1);
-    this._game_bgm = buffer;
+    if(eval(game_config['Auto Setup'])){
+        this._auto_end_time = eval(game_config['Duration']);
+        this._auto_mode = true;
+        this._controller_analyzer = this.getControlAutoBGM();
+        this._auto_audio = this.getAutoBGM();
+        AudioManager.updateBgmParameters(bgm);
+        this._game_bgm = buffer;
+        this._auto_mode = true;
+    }else{
+        const buffer = AudioManager.createBuffer("bgm/", bgm.name);
+        AudioManager.updateBgmParameters(bgm);
+        buffer.play(true, 0);
+        AudioManager.fadeOutBgm(1);
+        this._game_bgm = buffer;
+    }
 }
 
 SpriteRhythm_Controller.prototype.createButton = function(btn_data){
@@ -1387,7 +1692,16 @@ SpriteRhythm_Controller.prototype.update = function(){
 }
 
 SpriteRhythm_Controller.prototype.updateDuration = function(){
-    if(!this._ended)this._game_time++;
+    if(!this._ended){
+        if(this._auto_mode){
+            if(this._auto_game_timer){
+                this._game_time++;
+            }
+            return;
+        }else{
+            this._game_time++;
+        }
+    }
     if(!this._game_bgm){
         this._duration--;
         if(this._duration <= 0){
@@ -1396,7 +1710,245 @@ SpriteRhythm_Controller.prototype.updateDuration = function(){
     }
 }
 
+SpriteRhythm_Controller.prototype.updateAutoSpawn = function(){
+    if(this._ended)return;
+    if(!this._btn_chks){
+        this._btn_chks = {};
+    }
+    if(!Array.isArray(this._auto_spawns)){
+        this._auto_spawns = [];
+    }
+    const game_config = $gameTemp.rhythmGame();
+    const auto_rail_configs = game_config['Auto Rail Setup'];
+    const game_rails = this._button_rails;
+    const num_rails = game_rails.length;
+    const analyzer = this._controller_analyzer;
+    const audio = this._auto_audio;
+    if(isNaN(this._spawner_delay)){
+        this._spawner_delay = 0;
+        this._auto_spawn_time = 0;
+        this._auto_threshold_minimum = [];
+        this._auto_no_trigger_time = [];
+        this._check_time = [];
+        for(let x = 0; x < num_rails; x++){
+            this._auto_threshold_minimum[x] = 0;
+            this._auto_no_trigger_time[x] = 0;
+            this._check_time[x] = 0;
+        }
+        this._spawn_seperator = this.calculateAutoSpawnSeparation();
+        AudioManager.fadeOutBgm(((this._spawn_seperator * 3) / 60));
+    }
+    if(this._spawn_seperator <= 0){
+        this._spawner_delay = undefined;
+        return;
+    }
+    const buffer_length = analyzer.frequencyBinCount;
+    const data_array = new Uint8Array(buffer_length);
+    analyzer.getByteFrequencyData(data_array);
+    const div_val = Math.floor(buffer_length / num_rails);
+    const btn_checks = [];
+    for(let i = 0; i < num_rails; i++){
+        const rail = game_rails[i];
+        const rail_data = rail._data;
+        const rail_input = rail_data['Button'];
+        const auto_rail_config = auto_rail_configs.find((config)=>{
+            return config['Rail Input'] == rail_input;
+        })
+        if(auto_rail_config){
+            const ds = (i * div_val);
+            const de = ((i * div_val) + div_val)
+            const si = eval(auto_rail_config['Start Index']);
+            const ei = eval(auto_rail_config['End Index']);
+            const start = isNaN(si) ? ds : si;
+            const end = ei || de;
+            if(end <= start){
+                console.error(`Bad auto rail setup for ${rail_input}. Ensure end is more than start.`);
+                continue;
+            }
+            let val = 0;
+            for(let q = start; q < end; q++){
+                val += data_array[q];
+            }
+            val /= (end - start);
+            btn_checks[i] = val;
+        }else{
+            const start = i * div_val;
+            const end = start + div_val;
+            let val = 0;
+            for(let q = start; q < end; q++){
+                val += data_array[q];
+            }
+            val /= div_val;
+            btn_checks[i] = val;
+        }
+    }
+    this._btn_chks[this._auto_spawn_time] = btn_checks;
+    this._spawner_delay++;
+    if(this._spawner_delay >= this._spawn_seperator * 3 && !this._auto_play_bgm){
+        audio.play();
+        this._auto_play_bgm = true;
+    }
+    this._auto_spawn_time++;
+    const offset_time = this._spawn_seperator * 2;
+    if(this._auto_spawn_time >= offset_time){
+        this._auto_game_timer = true;
+        if(!Array.isArray(this._check_inputs)){
+            this._check_inputs = [];
+        }
+        const auto_time = this._auto_spawn_time - offset_time;
+        const end_auto_time = auto_time + this._spawn_seperator;
+        for(let i = 0; i < num_rails; i++){
+            const rail = game_rails[i];
+            const rail_data = rail._data;
+            const rail_input = rail_data['Button'];
+            const threshold = eval(game_config['Auto Threshold']);
+            const trigger_threshold = eval(game_config['Auto Trigger Threshold']);
+            const press_threshold = eval(game_config['Auto Press Threshold']);
+            const auto_threshold = eval(game_config['Auto Shift Spawn']);
+            const decay = eval(game_config['Auto Shift Decay']) || 1;
+            const check_time = this._check_time[i];
+            if(auto_time < check_time)continue;
+            let index = auto_time;
+            let press_time = 0;
+            let cooldown = 0;
+            if(this._auto_no_trigger_time[i] > 0){
+                this._auto_no_trigger_time[i]--;
+                continue;
+            }
+            while(index < end_auto_time){
+                if(cooldown > 0){
+                    cooldown--;
+                    if(cooldown < 0){
+                        cooldown = 0;
+                    }
+                    continue;
+                }
+                const audio_value = this._btn_chks[index][i] || 0;
+                if(auto_threshold){
+                    if(
+                        audio_value >= this._auto_threshold_minimum[i] &&
+                        audio_value >= threshold
+                    ){
+                        press_time++;
+                        this._auto_threshold_minimum[i] = audio_value;
+                    }else{
+                        if(press_time > 0 && press_time > trigger_threshold){
+                            const is_trigger = press_time < press_threshold;
+                            const spawn_data = {};
+                            spawn_data['Identifier'] = rail_input;
+                            spawn_data['Trigger Only'] = is_trigger;
+                            spawn_data['Spawn Time'] = Math.max(0, (index - press_time));
+                            spawn_data['Hold Time'] = JsonEx.makeDeepCopy(press_time);
+                            this._auto_spawns.push(spawn_data);
+                            press_time = 0;
+                            cooldown = eval(game_config['Auto Spawn Cooldown']) + press_time;
+                        }else{
+                            press_time = 0;
+                        }
+                        this._auto_threshold_minimum[i] = (this._auto_threshold_minimum[i] - decay).clamp(0, Infinity);
+                    }
+                }else{
+                    if(audio_value >= threshold){
+                        press_time++;
+                    }else if(press_time > 0 && press_time > trigger_threshold){
+                        const is_trigger = press_time < press_threshold;
+                        const spawn_data = {};
+                        spawn_data['Identifier'] = rail_input;
+                        spawn_data['Trigger Only'] = is_trigger;
+                        spawn_data['Spawn Time'] = Math.max(0, (index - press_time));
+                        spawn_data['Hold Time'] = JsonEx.makeDeepCopy(press_time);
+                        this._auto_spawns.push(spawn_data);
+                        press_time = 0;
+                        cooldown = eval(game_config['Auto Spawn Cooldown']) + press_time;
+                    }else if(press_time > 0){
+                        press_time = 0;
+                    }
+                }
+                index++;
+                if(index >= end_auto_time && press_time > 0){
+                    while(press_time > 0){
+                        if(cooldown > 0){
+                            cooldown--;
+                            if(cooldown < 0){
+                                cooldown = 0;
+                            }
+                            continue;
+                        }
+                        if(this._btn_chks[index]){
+                            const audio_value = this._btn_chks[index][i] || 0;
+                            if(auto_threshold){
+                                if(
+                                    audio_value >= this._auto_threshold_minimum[i] &&
+                                    audio_value >= threshold
+                                ){
+                                    press_time++;
+                                    this._auto_threshold_minimum[i] = audio_value;
+                                }else{
+                                    if(press_time > 0 && press_time > trigger_threshold){
+                                        const is_trigger = press_time < press_threshold;
+                                        const spawn_data = {};
+                                        spawn_data['Identifier'] = rail_input;
+                                        spawn_data['Trigger Only'] = is_trigger;
+                                        spawn_data['Spawn Time'] = Math.max(0, (index - press_time));
+                                        spawn_data['Hold Time'] = JsonEx.makeDeepCopy(press_time);
+                                        this._auto_spawns.push(spawn_data);
+                                        press_time = 0;
+                                        cooldown = eval(game_config['Auto Spawn Cooldown']) + press_time;
+                                    }else{
+                                        press_time = 0
+                                    }
+                                    this._auto_threshold_minimum[i] = (this._auto_threshold_minimum[i] - decay).clamp(0, Infinity);
+                                }
+                            }else{
+                                if(audio_value >= threshold){
+                                    press_time++;
+                                }else if(press_time > 0 && press_time > trigger_threshold){
+                                    const is_trigger = press_time < press_threshold;
+                                    const spawn_data = {};
+                                    spawn_data['Identifier'] = rail_input;
+                                    spawn_data['Trigger Only'] = is_trigger;
+                                    spawn_data['Spawn Time'] = Math.max(0, (index - press_time));
+                                    spawn_data['Hold Time'] = JsonEx.makeDeepCopy(press_time);
+                                    this._auto_spawns.push(spawn_data);
+                                    press_time = 0;
+                                    cooldown = eval(game_config['Auto Spawn Cooldown']) + press_time;
+                                }else if(press_time > 0){
+                                    press_time = 0;
+                                }
+                            }
+                            index++;
+                        }else{
+                            break;
+                        }
+                    }
+                }
+            }
+            this._auto_no_trigger_time[i] = cooldown;
+            this._check_time[i] = index;
+        }
+    }
+}
+
+SpriteRhythm_Controller.prototype.updateAutoButtons = function(){
+    const game_time = this._game_time;
+    const btn_spawns = this._auto_spawns;
+    for(let i = 0; i < btn_spawns.length; i++){
+        const spawn = btn_spawns[i];
+        const spawn_time = spawn['Spawn Time'];
+        if(game_time >= spawn_time){
+            this.createButton(spawn);
+            btn_spawns.splice(i, 1);
+            i--;
+        }
+    }
+}
+
 SpriteRhythm_Controller.prototype.updateSpawn = function(){
+    if(this._auto_mode){
+        this.updateAutoSpawn();
+        this.updateAutoButtons();
+        return;
+    }
     const game_time = this._game_time;
     const game_config = $gameTemp.rhythmGame();
     const btn_spawns = game_config['Button Spawn'];
@@ -1413,7 +1965,37 @@ SpriteRhythm_Controller.prototype.updateSpawn = function(){
 
 SpriteRhythm_Controller.prototype.updateInput = function(){}
 
+SpriteRhythm_Controller.prototype.updateAutoEnd = function(){
+    const game_time = this._game_time;
+    const end_time = this._auto_end_time;
+    if(game_time >= end_time){
+        this._ended = true;
+    }
+    if(this._ended){
+        const reserved_buttons = this._auto_spawns;
+        if(reserved_buttons.length > 0)return;
+        if(!this._audio_fade){
+            this._audio_fade = true;
+            this._fadeOut = 60;
+            return;
+        }
+        const audio = this._auto_audio;
+        if(this._fadeOut > 0){
+            this._fadeOut--;
+            this.alpha -= 1/60;
+            audio.volume = Math.max(0, this.alpha);
+            return;
+        }
+        this.endGame();
+        $gameTemp.endRhythmGame();
+    }
+}
+
 SpriteRhythm_Controller.prototype.updateEnd = function(){
+    if(this._auto_mode){
+        this.updateAutoEnd();
+        return;
+    }
     if(!this._ended){
         const game_config = $gameTemp.rhythmGame();
         const btn_spawns = game_config['Button Spawn'];
