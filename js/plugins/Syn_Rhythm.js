@@ -1,6 +1,6 @@
 /*:
  * @author Synrec/Kylestclr
- * @plugindesc v1.2 A Rhythm game creator
+ * @plugindesc v1.3 A Rhythm game creator
  * @target MZ
  * 
  * @command Start Rhythm
@@ -12,7 +12,31 @@
  * @default rhythm
  * 
  * @help
- * Set the game parameters in the plugin parameters
+ * Set the game parameters in the plugin parameters.
+ * If you are new to the plugin, it is recommended that
+ * you use the auto mode which will automatically generate 
+ * buttons for your minigame.
+ * 
+ * When setting up your auto mode gameplay, ensure "Auto Setup"
+ * is set to 'true', leave the "Auto FFT" as 2048 unless you are
+ * very sure you know what you are doing. The trigger threshold
+ * is the sound wave amplitude read time the sound exceeds threshold.
+ * 
+ * The "Auto Rail" parameter can be used to determine which section
+ * of the wave amplitude can be used for the amplitude average
+ * calculation.
+ * 
+ * Threshold value is gained from the amplitude average value of the 
+ * wave in addition to the "Auto Threshold" value set. If the section
+ * of the wave under consideration exceeds the threshold, it will
+ * begin generating button data.
+ * 
+ * See the HELP file for more information.
+ * 
+ * If using with the tactical battle system and you want
+ * the rhythm game to activate in battle, set the 
+ * "Target Animation" of the skill to 'target' and set a
+ * skill animation. It won't use battler normal attack.
  * 
  * @param Do Not Destroy
  * @desc Prevents button JS destruction
@@ -906,6 +930,61 @@ Game_Player.prototype.canMove = function() {
     }
     return Syn_Rhythm_GmPlyr_CanMov.call(this, ...arguments);
 }
+/**
+ * The following is for the tactical battle system.
+ */
+Game_MapBattler.prototype.processRhythmGame = function(){
+    const coords = this._targetHitBatt.coords;
+    const origin = this._targetHitBatt.origin;
+    const action = this._targetHitBatt.action;
+    const data = this._targetHitBatt.data;
+    if(!DataManager.isSkill(data))return;
+    const skill_id = data.id;
+    const skill_config = Syn_Rhythm.SKILL_CONFIGURATIONS.find((config)=>{
+        return eval(config['Skill']) == skill_id;
+    })
+    if(!skill_config)return;
+    const enemies = this._battler.isActor() ? this.getValidEnemies(coords, data) : this.getValidActors(coords, data);
+    const allies = this._battler.isActor() ? this.getValidActors(coords, data) : this.getValidEnemies(coords, data);
+    const configuration = getConfigurationDataTBS(data, this);
+    let targets = [];
+    const confuseType = this._confuseType;
+    const isConfused = this._battler.isConfused();
+    if((this.isEnemyScope(data) || isConfused) && [0,1,2].includes(confuseType)){
+        targets = targets.concat(enemies);
+    }
+    if((this.isAllyScope(data) || isConfused) && [0,2,3].includes(confuseType)){
+        targets = targets.concat(allies);
+    }
+    if((this.isUserScope(data) || isConfused) && [0,2].includes(confuseType)){
+        for(let i = 0; i < coords.length; i++){
+            const coord = coords[i];
+            const x = coord[0];
+            const y = coord[1];
+            if(this.x == x && this.y == y){
+                targets.push(this);
+            }
+        }
+    }
+    targets = this.filterTargets(targets, action);
+    targets = targets.filter(Boolean);
+    if(targets.length <= 0)return;
+    const hitTargets = targets.map(target => target._battler);
+    const rhythm_id = skill_config['Rhythm Game'];
+    const battler = this._battler;
+    $gameTemp.startRhythmGame(rhythm_id, battler, hitTargets)
+}
+
+Syn_Rhythm_GmMapBatt_AppHitBatt = Game_MapBattler.prototype.applyHitBatt;
+Game_MapBattler.prototype.applyHitBatt = function(){
+    if(!this._targetHitBatt)return;
+    if(!this._targetHitBatt.rhythm){
+        this.processRhythmGame();
+        this._targetHitBatt.rhythm = true;
+        return;
+    }
+    Syn_Rhythm_GmMapBatt_AppHitBatt.call(this, ...arguments);
+}
 
 function SpriteRhythm_AnimGfx(){
     this.initialize(...arguments);
@@ -1243,8 +1322,12 @@ SpriteRhythm_GameRail.prototype.confirmButton = function(){
 }
 
 SpriteRhythm_GameRail.prototype.executeSkill = function(scale){
+    let  map_tbs = false;
+    if($gameMap.isTBS){
+        map_tbs = $gameMap.isTBS();
+    }
     const log_window = BattleManager._logWindow;
-    if(!log_window)return;
+    if(!log_window && !map_tbs)return;
     const battler = $gameTemp.rhythmBattler();
     if(!battler)return;
     const data = this._data;
@@ -1255,7 +1338,7 @@ SpriteRhythm_GameRail.prototype.executeSkill = function(scale){
     const action = new Game_Action(battler);
     action.setSkill(skill_id);
     action._dmg_ratio = scale_ratio;
-    if(scale_ratio <= 0){
+    if(scale_ratio <= 0 && !map_tbs){
         log_window.performAction(battler, action);
         return;
     }
@@ -1264,9 +1347,32 @@ SpriteRhythm_GameRail.prototype.executeSkill = function(scale){
         action.apply(target);
         target.startDamagePopup();
         target.refresh();
-        log_window.displayAddedStates(target);
+        if(!map_tbs){
+            log_window.displayAddedStates(target);
+        }
     })
-    log_window.showAnimation(battler, targets, skill_data.animationId);
+    if(!map_tbs){
+        log_window.showAnimation(battler, targets, skill_data.animationId);
+    }else if(map_tbs){
+        const configuration = getConfigurationDataTBS(data, this);
+        const target_anim = configuration['Animation Type'] == 'target';
+        const anim = data.animationId;
+        const map_battlers = $gameMap._enemies.concat($gameMap._actors);
+        const map_targets = targets.map((battler)=>{
+            return map_battlers.find((map_char)=>{
+                return map_char._battler == battler;
+            })
+        }).filter(Boolean)
+        if(target_anim && anim > 0){
+            if(TBS_MV_MODE){
+                map_targets.forEach((target)=>{
+                    target.requestAnimation(anim);
+                })
+            }else{
+                $gameTemp.requestAnimation(map_targets, anim);
+            }
+        }
+    }
 }
 
 SpriteRhythm_GameRail.prototype.releaseButton = function(){
