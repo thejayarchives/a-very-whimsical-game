@@ -1467,9 +1467,12 @@ SpriteRhythm_Visualizer.prototype.generateRandomColor = function(){
     const base_r = Math.randomInt(255);
     const base_g = Math.randomInt(255);
     const base_b = Math.randomInt(255);
-    const calc_r = !isNaN(this._last_r) ? (this._last_r + Math.randomInt(2)).clamp(0, 255) : 0
-    const calc_g = !isNaN(this._last_g) ? (this._last_g + Math.randomInt(2)).clamp(0, 255) : 0
-    const calc_b = !isNaN(this._last_b) ? (this._last_b + Math.randomInt(2)).clamp(0, 255) : 0
+    const mult_r = Math.random() < 0.5 ? -1 : 1;
+    const mult_g = Math.random() < 0.5 ? -1 : 1;
+    const mult_b = Math.random() < 0.5 ? -1 : 1;
+    const calc_r = !isNaN(this._last_r) ? (this._last_r + Math.randomInt(2) * mult_r).clamp(0, 255) : 0
+    const calc_g = !isNaN(this._last_g) ? (this._last_g + Math.randomInt(2) * mult_g).clamp(0, 255) : 0
+    const calc_b = !isNaN(this._last_b) ? (this._last_b + Math.randomInt(2) * mult_b).clamp(0, 255) : 0
     this._last_r = calc_r || base_r;
     this._last_g = calc_g || base_g;
     this._last_b = calc_b || base_b;
@@ -1504,8 +1507,8 @@ SpriteRhythm_Visualizer.prototype.drawCircle = function(){
     const y = eval(visualizer_settings['Screen Y']) || 0;
     const w = eval(visualizer_settings['Bar Width']);
     const a = (Math.PI * 2) / display_array.filter(Boolean).length * w;
-    const color = this.convertTo0XHEX(visualizer_settings['Color'] || this.generateRandomColor());
     for(let i = 0; i < display_array.length; i++){
+        const color = this.convertTo0XHEX(visualizer_settings['Color'] || this.generateRandomColor());
         const angle = a * i;
         const mag = display_array[i];
         const cx = x + r * Math.cos(angle);
@@ -1527,8 +1530,8 @@ SpriteRhythm_Visualizer.prototype.drawSquare = function(){
     const y = eval(visualizer_settings['Screen Y']) || 0;
     const w = eval(visualizer_settings['Bar Width']);
     const a = (Math.PI * 2) / display_array.filter(Boolean).length * w;
-    const color = this.convertTo0XHEX(visualizer_settings['Color'] || this.generateRandomColor());
     for(let i = 0; i < display_array.length; i++){
+        const color = this.convertTo0XHEX(visualizer_settings['Color'] || this.generateRandomColor());
         const angle = a * i;
         const mag = display_array[i];
         const cx = x + r * Math.cos(angle);
@@ -1549,12 +1552,12 @@ SpriteRhythm_Visualizer.prototype.drawLine = function(){
     const x = eval(visualizer_settings['Screen X']) || 0;
     const y = eval(visualizer_settings['Screen Y']) || 0;
     const w = eval(visualizer_settings['Bar Width']);
-    const color = visualizer_settings['Color'] || this.generateRandomColor();
     for(let i = 0; i < display_array.length; i++){
+        const color = visualizer_settings['Color'] || this.generateRandomColor();
         const mag = display_array[i];
         const bx = w * i;
         const by = 0;
-        display.fillRect(x + bx, y + by, w, mag, color);
+        display.fillRect(x + bx, y + by, w, -mag, color);
     }
 }
 
