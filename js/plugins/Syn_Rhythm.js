@@ -1,6 +1,6 @@
 /*:
  * @author Synrec/Kylestclr
- * @plugindesc v1.1 A Rhythm game creator
+ * @plugindesc v1.2 A Rhythm game creator
  * @target MZ
  * 
  * @command Start Rhythm
@@ -282,11 +282,39 @@
  * @type text
  * @default 6
  * 
+ * @param Start Buffer
+ * @desc Time before the game starts
+ * Used in auto mode
+ * @type text
+ * @default 60
+ * 
+ * @param Start Buffer SE
+ * @desc Used alternatively to fixed "Start Buffer"
+ * Used in auto mode
+ * @type struct<audioSe>
+ * 
+ * @param Start Buffer Play Count
+ * @parent Start Buffer SE
+ * @desc Number of times to play SE before starting game
+ * @type text
+ * @default 3
+ * 
  * @param Input Buffer
  * @parent Game Speed
  * @desc Time granted for hold input before decay
  * @type text
  * @default 12
+ * 
+ * @param Hold Length Per Frame
+ * @desc Set the draw length per hold frame
+ * Value is pixels per frame
+ * @type text
+ * @default 3
+ * 
+ * @param Hold Color
+ * @desc Set the color for holding
+ * @type text
+ * @default #0000ff
  * 
  * @param Button Rails
  * @desc Setup rails for each button
@@ -685,6 +713,7 @@ function GAME_PARSER_RHYTHM(obj){
         obj['Score Sprite Configuration'] = SCORE_SPRITE_PARSER_RHYTHM(obj['Score Sprite Configuration']);
         obj['BGM'] = BGM_PARSER_RHYTHM(obj['BGM']);
         obj['Sound Popup'] = SOUND_POPUPS_PARSER_RHYTHM(obj['Sound Popup']);
+        obj['Start Buffer SE'] = SE_PARSER_RHYTHM(obj['Start Buffer SE']);
         try{
             obj['Button Rails'] = JSON.parse(obj['Button Rails']).map((config)=>{
                 return BUTTON_RAIL_PARSER_RHYTHM(config);
@@ -1591,6 +1620,10 @@ SpriteRhythm_Controller.prototype.createScore = function(){
 
 SpriteRhythm_Controller.prototype.calculateAutoSpawnSeparation = function(){
     const game_config = $gameTemp.rhythmGame();
+    const set_time = eval(game_config['Start Buffer']);
+    if(set_time && !isNaN(set_time)){
+        return set_time;
+    }
     let rail_width = 0;
     this._button_rails.forEach((rail)=>{
         const w = rail.width;
@@ -1600,7 +1633,7 @@ SpriteRhythm_Controller.prototype.calculateAutoSpawnSeparation = function(){
     rail_width = parseInt(rail_width);
     const spd = Math.max(1, eval(game_config['Game Speed']));
     const delay = rail_width / spd;
-    return Math.round(delay);
+    return Math.round(delay) * 3;
 }
 
 SpriteRhythm_Controller.prototype.getControlAutoBGM = function(){
@@ -1714,16 +1747,28 @@ SpriteRhythm_Controller.prototype.updateAutoSpawn = function(){
     if(this._ended)return;
     if(!this._btn_chks){
         this._btn_chks = {};
+        this._amplitude_avgs = {};
     }
     if(!Array.isArray(this._auto_spawns)){
         this._auto_spawns = [];
     }
     const game_config = $gameTemp.rhythmGame();
+    const threshold = eval(game_config['Auto Threshold']);
+    const trigger_threshold = eval(game_config['Auto Trigger Threshold']);
+    const press_threshold = eval(game_config['Auto Press Threshold']);
+    const auto_threshold = eval(game_config['Auto Shift Spawn']);
+    const decay = eval(game_config['Auto Shift Decay']) || 1;
     const auto_rail_configs = game_config['Auto Rail Setup'];
     const game_rails = this._button_rails;
     const num_rails = game_rails.length;
     const analyzer = this._controller_analyzer;
     const audio = this._auto_audio;
+    if(!Array.isArray(this._auto_buttons_pressing)){
+        this._auto_buttons_pressing = [];
+    }
+    if(!Array.isArray(this._auto_buttons_cooldown)){
+        this._auto_buttons_cooldown = [];
+    }
     if(isNaN(this._spawner_delay)){
         this._spawner_delay = 0;
         this._auto_spawn_time = 0;
@@ -1734,11 +1779,20 @@ SpriteRhythm_Controller.prototype.updateAutoSpawn = function(){
             this._auto_threshold_minimum[x] = 0;
             this._auto_no_trigger_time[x] = 0;
             this._check_time[x] = 0;
+            this._auto_buttons_pressing[x] = 0;
+            this._auto_buttons_cooldown[x] = 0;
         }
-        this._spawn_seperator = this.calculateAutoSpawnSeparation();
-        AudioManager.fadeOutBgm(((this._spawn_seperator * 3) / 60));
+        this._start_se_plays = eval(game_config['Start Buffer Play Count']);
+        this._start_se = (game_config['Start Buffer SE'] || {}).name ? game_config['Start Buffer SE'] : null;
+        if(this._start_se){
+            this._spawn_seperator = 0;
+        }else{
+            this._spawn_seperator = this.calculateAutoSpawnSeparation();
+        }
+        const fade_time = this._spawn_seperator ? this._spawn_seperator / 60 : 1;
+        AudioManager.fadeOutBgm(fade_time);
     }
-    if(this._spawn_seperator <= 0){
+    if(this._spawn_seperator < 0){
         this._spawner_delay = undefined;
         return;
     }
@@ -1747,6 +1801,7 @@ SpriteRhythm_Controller.prototype.updateAutoSpawn = function(){
     analyzer.getByteFrequencyData(data_array);
     const div_val = Math.floor(buffer_length / num_rails);
     const btn_checks = [];
+    let avg_amp = 0;
     for(let i = 0; i < num_rails; i++){
         const rail = game_rails[i];
         const rail_data = rail._data;
@@ -1754,6 +1809,7 @@ SpriteRhythm_Controller.prototype.updateAutoSpawn = function(){
         const auto_rail_config = auto_rail_configs.find((config)=>{
             return config['Rail Input'] == rail_input;
         })
+        let val = 0;
         if(auto_rail_config){
             const ds = (i * div_val);
             const de = ((i * div_val) + div_val)
@@ -1765,169 +1821,260 @@ SpriteRhythm_Controller.prototype.updateAutoSpawn = function(){
                 console.error(`Bad auto rail setup for ${rail_input}. Ensure end is more than start.`);
                 continue;
             }
-            let val = 0;
             for(let q = start; q < end; q++){
-                val += data_array[q];
+                val += data_array[q] || 0;
             }
+            avg_amp = val;
             val /= (end - start);
             btn_checks[i] = val;
         }else{
             const start = i * div_val;
             const end = start + div_val;
-            let val = 0;
             for(let q = start; q < end; q++){
-                val += data_array[q];
+                val += data_array[q] || 0;
             }
+            avg_amp = val;
             val /= div_val;
             btn_checks[i] = val;
         }
+        const check_time = this._check_time[i];
+        const time = this._spawner_delay;
+        if(time < check_time && !isNaN(check_time))continue;
+        if(this._auto_no_trigger_time[i] > 0){
+            this._auto_no_trigger_time[i]--;
+            continue;
+        }
+        if(this._auto_buttons_cooldown[i] > 0){
+            this._auto_buttons_cooldown[i]--;
+            continue;
+        }
+        const min_diff = this._auto_threshold_minimum[i] || 0;
+        if(auto_threshold){
+            const time = this._spawner_delay;
+            const chk_amp = avg_amp / buffer_length;
+            const diff = val - chk_amp;
+            if(
+                diff >= min_diff &&
+                val >= (chk_amp + threshold)
+            ){
+                this._auto_buttons_pressing[i]++;
+                this._auto_threshold_minimum[i] = diff;
+            }else{
+                if(this._auto_buttons_pressing[i] > 0 && this._auto_buttons_pressing[i] > trigger_threshold){
+                    const is_trigger = this._auto_buttons_pressing[i] < press_threshold;
+                    const spawn_data = {};
+                    spawn_data['Identifier'] = rail_input;
+                    spawn_data['Trigger Only'] = is_trigger;
+                    spawn_data['Spawn Time'] = Math.max(0, (time - this._auto_buttons_pressing[i]));
+                    spawn_data['Hold Time'] = JsonEx.makeDeepCopy(this._auto_buttons_pressing[i]);
+                    this._auto_spawns.push(spawn_data);
+                    this._auto_buttons_pressing[i] = 0;
+                    this._auto_buttons_cooldown[i] = eval(game_config['Auto Spawn Cooldown']);
+                }else{
+                    this._auto_buttons_pressing[i] = 0;
+                }
+                this._auto_threshold_minimum[i] = (this._auto_threshold_minimum[i] - decay).clamp(0, Infinity);
+            }
+        }else{
+            if(val >= threshold){
+                this._auto_buttons_pressing[i]++;
+            }else if(this._auto_buttons_pressing[i] > 0 && this._auto_buttons_pressing[i] > trigger_threshold){
+                const is_trigger = this._auto_buttons_pressing[i] < press_threshold;
+                const spawn_data = {};
+                spawn_data['Identifier'] = rail_input;
+                spawn_data['Trigger Only'] = is_trigger;
+                spawn_data['Spawn Time'] = Math.max(0, (time - this._auto_buttons_pressing[i]));
+                spawn_data['Hold Time'] = JsonEx.makeDeepCopy(this._auto_buttons_pressing[i]);
+                this._auto_spawns.push(spawn_data);
+                this._auto_buttons_pressing[i] = 0;
+                this._auto_buttons_cooldown[i] = eval(game_config['Auto Spawn Cooldown']);
+            }else if(press_time > 0){
+                this._auto_buttons_pressing[i] = 0;
+            }
+        }
     }
-    this._btn_chks[this._auto_spawn_time] = btn_checks;
+    avg_amp /= buffer_length;
+    this._btn_chks[this._spawner_delay] = btn_checks;
+    this._amplitude_avgs[this._spawner_delay] = avg_amp;
     this._spawner_delay++;
-    if(this._spawner_delay >= this._spawn_seperator * 3 && !this._auto_play_bgm){
+    if(this._played_start_se){
+        if(this._played_start_se.isPlaying())return;
+    }
+    if(this._start_se && this._start_se_plays > 0){
+        if(!this._played_start_se){
+            AudioManager.playSe(this._start_se);
+            const audio_buffers = AudioManager._seBuffers;
+            this._played_start_se = audio_buffers[audio_buffers.length - 1];
+        }
+        if(!this._played_start_se.isPlaying()){
+            AudioManager.cleanupSe();
+            AudioManager.playSe(this._start_se);
+            const audio_buffers = AudioManager._seBuffers;
+            this._played_start_se = audio_buffers[audio_buffers.length - 1];
+            this._start_se_plays--;
+        }
+        return;
+    }else if(this._start_se && !this._set_seperator_spawn_auto){
+        this._spawn_seperator = JsonEx.makeDeepCopy(this._spawner_delay);
+        this._set_seperator_spawn_auto = true;
+    }
+    if(this._spawner_delay >= this._spawn_seperator && !this._auto_play_bgm){
         audio.play();
         this._auto_play_bgm = true;
     }
     this._auto_spawn_time++;
-    const offset_time = this._spawn_seperator * 2;
+    const offset_time = Math.ceil(this._spawn_seperator * 0.66);
     if(this._auto_spawn_time >= offset_time){
         this._auto_game_timer = true;
-        if(!Array.isArray(this._check_inputs)){
-            this._check_inputs = [];
-        }
-        const auto_time = this._auto_spawn_time - offset_time;
-        const end_auto_time = auto_time + this._spawn_seperator;
-        for(let i = 0; i < num_rails; i++){
-            const rail = game_rails[i];
-            const rail_data = rail._data;
-            const rail_input = rail_data['Button'];
-            const threshold = eval(game_config['Auto Threshold']);
-            const trigger_threshold = eval(game_config['Auto Trigger Threshold']);
-            const press_threshold = eval(game_config['Auto Press Threshold']);
-            const auto_threshold = eval(game_config['Auto Shift Spawn']);
-            const decay = eval(game_config['Auto Shift Decay']) || 1;
-            const check_time = this._check_time[i];
-            if(auto_time < check_time)continue;
-            let index = auto_time;
-            let press_time = 0;
-            let cooldown = 0;
-            if(this._auto_no_trigger_time[i] > 0){
-                this._auto_no_trigger_time[i]--;
-                continue;
-            }
-            while(index < end_auto_time){
-                if(cooldown > 0){
-                    cooldown--;
-                    if(cooldown < 0){
-                        cooldown = 0;
-                    }
-                    continue;
-                }
-                const audio_value = this._btn_chks[index][i] || 0;
-                if(auto_threshold){
-                    if(
-                        audio_value >= this._auto_threshold_minimum[i] &&
-                        audio_value >= threshold
-                    ){
-                        press_time++;
-                        this._auto_threshold_minimum[i] = audio_value;
-                    }else{
-                        if(press_time > 0 && press_time > trigger_threshold){
-                            const is_trigger = press_time < press_threshold;
-                            const spawn_data = {};
-                            spawn_data['Identifier'] = rail_input;
-                            spawn_data['Trigger Only'] = is_trigger;
-                            spawn_data['Spawn Time'] = Math.max(0, (index - press_time));
-                            spawn_data['Hold Time'] = JsonEx.makeDeepCopy(press_time);
-                            this._auto_spawns.push(spawn_data);
-                            press_time = 0;
-                            cooldown = eval(game_config['Auto Spawn Cooldown']) + press_time;
-                        }else{
-                            press_time = 0;
-                        }
-                        this._auto_threshold_minimum[i] = (this._auto_threshold_minimum[i] - decay).clamp(0, Infinity);
-                    }
-                }else{
-                    if(audio_value >= threshold){
-                        press_time++;
-                    }else if(press_time > 0 && press_time > trigger_threshold){
-                        const is_trigger = press_time < press_threshold;
-                        const spawn_data = {};
-                        spawn_data['Identifier'] = rail_input;
-                        spawn_data['Trigger Only'] = is_trigger;
-                        spawn_data['Spawn Time'] = Math.max(0, (index - press_time));
-                        spawn_data['Hold Time'] = JsonEx.makeDeepCopy(press_time);
-                        this._auto_spawns.push(spawn_data);
-                        press_time = 0;
-                        cooldown = eval(game_config['Auto Spawn Cooldown']) + press_time;
-                    }else if(press_time > 0){
-                        press_time = 0;
-                    }
-                }
-                index++;
-                if(index >= end_auto_time && press_time > 0){
-                    while(press_time > 0){
-                        if(cooldown > 0){
-                            cooldown--;
-                            if(cooldown < 0){
-                                cooldown = 0;
-                            }
-                            continue;
-                        }
-                        if(this._btn_chks[index]){
-                            const audio_value = this._btn_chks[index][i] || 0;
-                            if(auto_threshold){
-                                if(
-                                    audio_value >= this._auto_threshold_minimum[i] &&
-                                    audio_value >= threshold
-                                ){
-                                    press_time++;
-                                    this._auto_threshold_minimum[i] = audio_value;
-                                }else{
-                                    if(press_time > 0 && press_time > trigger_threshold){
-                                        const is_trigger = press_time < press_threshold;
-                                        const spawn_data = {};
-                                        spawn_data['Identifier'] = rail_input;
-                                        spawn_data['Trigger Only'] = is_trigger;
-                                        spawn_data['Spawn Time'] = Math.max(0, (index - press_time));
-                                        spawn_data['Hold Time'] = JsonEx.makeDeepCopy(press_time);
-                                        this._auto_spawns.push(spawn_data);
-                                        press_time = 0;
-                                        cooldown = eval(game_config['Auto Spawn Cooldown']) + press_time;
-                                    }else{
-                                        press_time = 0
-                                    }
-                                    this._auto_threshold_minimum[i] = (this._auto_threshold_minimum[i] - decay).clamp(0, Infinity);
-                                }
-                            }else{
-                                if(audio_value >= threshold){
-                                    press_time++;
-                                }else if(press_time > 0 && press_time > trigger_threshold){
-                                    const is_trigger = press_time < press_threshold;
-                                    const spawn_data = {};
-                                    spawn_data['Identifier'] = rail_input;
-                                    spawn_data['Trigger Only'] = is_trigger;
-                                    spawn_data['Spawn Time'] = Math.max(0, (index - press_time));
-                                    spawn_data['Hold Time'] = JsonEx.makeDeepCopy(press_time);
-                                    this._auto_spawns.push(spawn_data);
-                                    press_time = 0;
-                                    cooldown = eval(game_config['Auto Spawn Cooldown']) + press_time;
-                                }else if(press_time > 0){
-                                    press_time = 0;
-                                }
-                            }
-                            index++;
-                        }else{
-                            break;
-                        }
-                    }
-                }
-            }
-            this._auto_no_trigger_time[i] = cooldown;
-            this._check_time[i] = index;
-        }
+        // if(!Array.isArray(this._check_inputs)){
+        //     this._check_inputs = [];
+        // }
+        // const auto_time = this._auto_spawn_time - offset_time;
+        // const end_auto_time = auto_time + this._spawn_seperator;
+        // for(let i = 0; i < num_rails; i++){
+        //     const rail = game_rails[i];
+        //     const rail_data = rail._data;
+        //     const rail_input = rail_data['Button'];
+        //     const threshold = eval(game_config['Auto Threshold']);
+        //     const trigger_threshold = eval(game_config['Auto Trigger Threshold']);
+        //     const press_threshold = eval(game_config['Auto Press Threshold']);
+        //     const auto_threshold = eval(game_config['Auto Shift Spawn']);
+        //     const decay = eval(game_config['Auto Shift Decay']) || 1;
+        //     const check_time = this._check_time[i];
+        //     if(auto_time < check_time)continue;
+        //     let index = auto_time;
+        //     let press_time = 0;
+        //     let cooldown = 0;
+        //     if(this._auto_no_trigger_time[i] > 0){
+        //         this._auto_no_trigger_time[i]--;
+        //         continue;
+        //     }
+        //     while(index < end_auto_time){
+        //         if(cooldown > 0){
+        //             cooldown--;
+        //             if(cooldown < 0){
+        //                 cooldown = 0;
+        //             }
+        //             continue;
+        //         }
+        //         const audio_value = this._btn_chks[index][i] || 0;
+        //         const avg_amp = this._amplitude_avgs[index] || 0;
+        //         const diff = audio_value - avg_amp;
+        //         const min_diff = this._auto_threshold_minimum[i]
+        //         console.log(`....................`)
+        //         console.log(audio_value)
+        //         console.log(avg_amp)
+        //         console.log(diff)
+        //         console.log(min_diff)
+        //         console.log(threshold)
+        //         console.log(diff >= this._auto_threshold_minimum[i])
+        //         console.log(audio_value >= (avg_amp + threshold))
+        //         if(auto_threshold){
+        //             if(
+        //                 diff >= min_diff &&
+        //                 audio_value >= (avg_amp + threshold)
+        //             ){
+        //                 press_time++;
+        //                 this._auto_threshold_minimum[i] = diff;
+        //             }else{
+        //                 if(press_time > 0 && press_time > trigger_threshold){
+        //                     const is_trigger = press_time < press_threshold;
+        //                     const spawn_data = {};
+        //                     spawn_data['Identifier'] = rail_input;
+        //                     spawn_data['Trigger Only'] = is_trigger;
+        //                     spawn_data['Spawn Time'] = Math.max(0, (index - press_time));
+        //                     spawn_data['Hold Time'] = JsonEx.makeDeepCopy(press_time);
+        //                     this._auto_spawns.push(spawn_data);
+        //                     press_time = 0;
+        //                     cooldown = eval(game_config['Auto Spawn Cooldown']) + press_time;
+        //                 }else{
+        //                     press_time = 0;
+        //                 }
+        //                 this._auto_threshold_minimum[i] = (this._auto_threshold_minimum[i] - decay).clamp(0, Infinity);
+        //             }
+        //         }else{
+        //             if(audio_value >= threshold){
+        //                 press_time++;
+        //             }else if(press_time > 0 && press_time > trigger_threshold){
+        //                 const is_trigger = press_time < press_threshold;
+        //                 const spawn_data = {};
+        //                 spawn_data['Identifier'] = rail_input;
+        //                 spawn_data['Trigger Only'] = is_trigger;
+        //                 spawn_data['Spawn Time'] = Math.max(0, (index - press_time));
+        //                 spawn_data['Hold Time'] = JsonEx.makeDeepCopy(press_time);
+        //                 this._auto_spawns.push(spawn_data);
+        //                 press_time = 0;
+        //                 cooldown = eval(game_config['Auto Spawn Cooldown']) + press_time;
+        //             }else if(press_time > 0){
+        //                 press_time = 0;
+        //             }
+        //         }
+        //         index++;
+        //         if(index >= this._btn_chks.length && press_time > 0){
+        //             while(press_time > 0){
+        //                 if(cooldown > 0){
+        //                     cooldown--;
+        //                     if(cooldown < 0){
+        //                         cooldown = 0;
+        //                     }
+        //                     continue;
+        //                 }
+        //                 if(this._btn_chks[index]){
+        //                     const audio_value = this._btn_chks[index][i] || 0;
+        //                     if(auto_threshold){
+        //                         if(
+        //                             audio_value >= this._auto_threshold_minimum[i] &&
+        //                             audio_value >= threshold
+        //                         ){
+        //                             press_time++;
+        //                             this._auto_threshold_minimum[i] = audio_value;
+        //                         }else{
+        //                             if(press_time > 0 && press_time > trigger_threshold){
+        //                                 const is_trigger = press_time < press_threshold;
+        //                                 const spawn_data = {};
+        //                                 spawn_data['Identifier'] = rail_input;
+        //                                 spawn_data['Trigger Only'] = is_trigger;
+        //                                 spawn_data['Spawn Time'] = Math.max(0, (index - press_time));
+        //                                 spawn_data['Hold Time'] = JsonEx.makeDeepCopy(press_time);
+        //                                 this._auto_spawns.push(spawn_data);
+        //                                 press_time = 0;
+        //                                 cooldown = eval(game_config['Auto Spawn Cooldown']) + press_time;
+        //                             }else{
+        //                                 press_time = 0
+        //                             }
+        //                             this._auto_threshold_minimum[i] = (this._auto_threshold_minimum[i] - decay).clamp(0, Infinity);
+        //                         }
+        //                     }else{
+        //                         if(audio_value >= threshold){
+        //                             press_time++;
+        //                         }else if(press_time > 0 && press_time > trigger_threshold){
+        //                             const is_trigger = press_time < press_threshold;
+        //                             const spawn_data = {};
+        //                             spawn_data['Identifier'] = rail_input;
+        //                             spawn_data['Trigger Only'] = is_trigger;
+        //                             spawn_data['Spawn Time'] = Math.max(0, (index - press_time));
+        //                             spawn_data['Hold Time'] = JsonEx.makeDeepCopy(press_time);
+        //                             this._auto_spawns.push(spawn_data);
+        //                             press_time = 0;
+        //                             cooldown = eval(game_config['Auto Spawn Cooldown']) + press_time;
+        //                         }else if(press_time > 0){
+        //                             press_time = 0;
+        //                         }
+        //                     }
+        //                     index++;
+        //                 }else{
+        //                     break;
+        //                 }
+        //             }
+        //         }
+        //     }
+        //     this._auto_no_trigger_time[i] = cooldown;
+        //     this._check_time[i] = index;
+        // }
     }
 }
+
+SpriteRhythm_Controller.prototype.updateCreateAutoButton = function(index, time, pressed, value){}
 
 SpriteRhythm_Controller.prototype.updateAutoButtons = function(){
     const game_time = this._game_time;
@@ -1973,7 +2120,11 @@ SpriteRhythm_Controller.prototype.updateAutoEnd = function(){
     }
     if(this._ended){
         const reserved_buttons = this._auto_spawns;
-        if(reserved_buttons.length > 0)return;
+        console.log(this._auto_spawns);
+        if(reserved_buttons.length > 0){
+            this._auto_spawns = [];
+            return;
+        }
         if(!this._audio_fade){
             this._audio_fade = true;
             this._fadeOut = 60;
@@ -2068,6 +2219,9 @@ Window_BattleLog.prototype.updateWait = function() {
 
 Syn_Rhythm_ScnBse_IsBusy = Scene_Base.prototype.isBusy;
 Scene_Base.prototype.isBusy = function() {
+    if(!$gameTemp){
+        return Syn_Rhythm_ScnBse_IsBusy.call(this, ...arguments);
+    }
     return Syn_Rhythm_ScnBse_IsBusy.call(this, ...arguments) || !!$gameTemp.rhythmGame();
 }
 
