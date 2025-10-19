@@ -221,6 +221,18 @@
  * @type text
  * @default 0
  * 
+ * @param Draw Mode
+ * @desc Choose how to draw the visualizer
+ * @type select
+ * @option circle
+ * @option line
+ * @default line
+ * 
+ * @param Inner Radius
+ * @desc Used for circle and square
+ * @type text
+ * @default 64
+ * 
  * @param Bar Width
  * @desc The width of the bar
  * @type text
@@ -344,7 +356,7 @@
  * @type boolean
  * @default false
  * 
- * @param Auto Visualizer
+ * @param Visualizer
  * @parent Auto Setup
  * @desc A visualizer of the BGM
  * Leave parameter empty to  disable
@@ -663,9 +675,9 @@ function BUTTON_RAIL_PARSER_RHYTHM(obj){
             obj['Spawn Times'] = [];
         }
         try{
-            obj['Update Functions'] = JSON.parse(obj['Update Functions']).map((func)=>{
+            obj['Update Functions'] = JSON.parse(obj['Update Functions']).map((note)=>{
                 try{
-                    return JSON.parse(func);
+                    return JSON.parse(note);
                 }catch(e){
                     return;
                 }
@@ -728,7 +740,7 @@ function GAME_PARSER_RHYTHM(obj){
         }catch(e){
             obj['Button Spawn'] = [];
         }
-        obj['Auto Visualizer'] = AUTO_VISUALIZER_PARSER_RHYTHM(obj['Auto Visualizer']);
+        obj['Visualizer'] = AUTO_VISUALIZER_PARSER_RHYTHM(obj['Visualizer']);
         try{
             obj['Auto Rail Setup'] = JSON.parse(obj['Auto Rail Setup']).map((config)=>{
                 return AUTO_RAIL_PARSER_RHYTHM(config);
@@ -893,7 +905,7 @@ Game_Player.prototype.canMove = function() {
         return false;
     }
     return Syn_Rhythm_GmPlyr_CanMov.call(this, ...arguments);
-};
+}
 
 function SpriteRhythm_AnimGfx(){
     this.initialize(...arguments);
@@ -1413,9 +1425,9 @@ SpriteRhythm_GameRail.prototype.updateHolding = function(){
 SpriteRhythm_GameRail.prototype.updateFunctions = function(){
     const data = this._data;
     const update_functions = data['Update Functions'];
-    update_functions.forEach((func)=>{
+    update_functions.forEach((note)=>{
         try{
-            eval(func);
+            eval(note);
         }catch(e){
             console.error(e);
         }
@@ -1432,23 +1444,38 @@ SpriteRhythm_Visualizer.prototype.constructor = SpriteRhythm_Visualizer;
 SpriteRhythm_Visualizer.prototype.initialize = function(){
     Sprite.prototype.initialize.call(this);
     const game_config = $gameTemp.rhythmGame();
-    const data = game_config['Auto Visualizer'];
-    const x = eval(data['Screen X']) || 0;
-    const y = eval(data['Screen Y']) || 0;
-    this.move(x, y);
+    const data = game_config['Visualizer'];
+    this.move(0, 0);
     this.scale.x = eval(data['Scale X']);
     this.scale.y = eval(data['Scale Y']);
+    this._draw_mode = data['Draw Mode'];
     this._fixed_color = data['Color'];
     this._data = data;
     this.bitmap = new Bitmap(Graphics.width, Graphics.height);
+    this.createGfxPIXI();
     // this.anchor.x = 0.5;
     // this.anchor.y = 1;
 }
 
+SpriteRhythm_Visualizer.prototype.createGfxPIXI = function(){
+    const pixi = new PIXI.Graphics();
+    this.addChild(pixi);
+    this._pixi = pixi;
+}
+
 SpriteRhythm_Visualizer.prototype.generateRandomColor = function(){
-    const r = Math.randomInt(32).toString(16).padZero(2)
-    const g = Math.randomInt(32).toString(16).padZero(2)
-    const b = Math.randomInt(32).toString(16).padZero(2)
+    const base_r = Math.randomInt(255);
+    const base_g = Math.randomInt(255);
+    const base_b = Math.randomInt(255);
+    const calc_r = !isNaN(this._last_r) ? (this._last_r + Math.randomInt(2)).clamp(0, 255) : 0
+    const calc_g = !isNaN(this._last_g) ? (this._last_g + Math.randomInt(2)).clamp(0, 255) : 0
+    const calc_b = !isNaN(this._last_b) ? (this._last_b + Math.randomInt(2)).clamp(0, 255) : 0
+    this._last_r = calc_r || base_r;
+    this._last_g = calc_g || base_g;
+    this._last_b = calc_b || base_b;
+    const r = (calc_r ? calc_r : base_r).toString(16).padZero(2); 
+    const g = (calc_g ? calc_g : base_g).toString(16).padZero(2); 
+    const b = (calc_b ? calc_b : base_b).toString(16).padZero(2);
     const color = this._saved_color || `#${r}${g}${b}`;
     if(!this._saved_color){
         this._saved_color = color;
@@ -1460,6 +1487,75 @@ SpriteRhythm_Visualizer.prototype.generateRandomColor = function(){
         }
     }
     return color;
+}
+
+SpriteRhythm_Visualizer.prototype.convertTo0XHEX = function(str){
+    const nums = str.slice(str.indexOf('#') + 1);
+    return eval(`0x${nums}`);
+}
+
+SpriteRhythm_Visualizer.prototype.drawCircle = function(){
+    const visualizer_settings = this._data;
+    const display_array = this._data_array;
+    const pixi = this._pixi;
+    pixi.clear();
+    const r = eval(visualizer_settings['Inner Radius']) || 0;
+    const x = eval(visualizer_settings['Screen X']) || 0;
+    const y = eval(visualizer_settings['Screen Y']) || 0;
+    const w = eval(visualizer_settings['Bar Width']);
+    const a = (Math.PI * 2) / display_array.filter(Boolean).length * w;
+    const color = this.convertTo0XHEX(visualizer_settings['Color'] || this.generateRandomColor());
+    for(let i = 0; i < display_array.length; i++){
+        const angle = a * i;
+        const mag = display_array[i];
+        const cx = x + r * Math.cos(angle);
+        const cy = y + r * Math.sin(angle);
+        const tx = cx + mag * Math.cos(angle);
+        const ty = cy + mag * Math.sin(angle);
+        pixi.lineStyle(w, color, 0.5);
+        pixi.moveTo(cx,cy);
+        pixi.lineTo(tx,ty);
+    }
+}
+
+SpriteRhythm_Visualizer.prototype.drawSquare = function(){
+    const visualizer_settings = this._data;
+    const display_array = this._data_array;
+    const pixi = this._pixi;
+    pixi.clear();
+    const x = eval(visualizer_settings['Screen X']) || 0;
+    const y = eval(visualizer_settings['Screen Y']) || 0;
+    const w = eval(visualizer_settings['Bar Width']);
+    const a = (Math.PI * 2) / display_array.filter(Boolean).length * w;
+    const color = this.convertTo0XHEX(visualizer_settings['Color'] || this.generateRandomColor());
+    for(let i = 0; i < display_array.length; i++){
+        const angle = a * i;
+        const mag = display_array[i];
+        const cx = x + r * Math.cos(angle);
+        const cy = y + r * Math.sin(angle);
+        const tx = cx + mag * Math.cos(angle);
+        const ty = cy + mag * Math.sin(angle);
+        pixi.lineStyle(w, color, 0.5);
+        pixi.moveTo(cx,cy);
+        pixi.lineTo(tx,ty);
+    }
+}
+
+SpriteRhythm_Visualizer.prototype.drawLine = function(){
+    const visualizer_settings = this._data;
+    const display_array = this._data_array;
+    const display = this.bitmap;
+    display.clear();
+    const x = eval(visualizer_settings['Screen X']) || 0;
+    const y = eval(visualizer_settings['Screen Y']) || 0;
+    const w = eval(visualizer_settings['Bar Width']);
+    const color = visualizer_settings['Color'] || this.generateRandomColor();
+    for(let i = 0; i < display_array.length; i++){
+        const mag = display_array[i];
+        const bx = w * i;
+        const by = 0;
+        display.fillRect(x + bx, y + by, w, mag, color);
+    }
 }
 
 SpriteRhythm_Visualizer.prototype.update = function(){
@@ -1479,17 +1575,19 @@ SpriteRhythm_Visualizer.prototype.updateDisplayAnalyzer = function(){
 }
 
 SpriteRhythm_Visualizer.prototype.updateDraw = function(){
-    const visualizer_settings = this._data;
-    const display_array = this._data_array;
-    const display = this.bitmap;
-    display.clear();
-    const w = eval(visualizer_settings['Bar Width']);
-    const color = visualizer_settings['Color'] || this.generateRandomColor();
-    for(let i = 0; i < display_array.length; i++){
-        const mag = display_array[i];
-        const x = w * i;
-        const y = 0;
-        display.fillRect(x, y, w, mag, color);
+    const draw_mode = this._draw_mode;
+    switch(draw_mode){
+        case "circle":
+            this.drawCircle();
+            break;
+        case "square":
+            this.drawSquare();
+            break;
+        case "line":
+            this.drawLine();
+            break;
+        default:
+            this.drawLine();
     }
 }
 
@@ -1607,7 +1705,7 @@ SpriteRhythm_Controller.prototype.createRails = function(){
 
 SpriteRhythm_Controller.prototype.createAutoVisualizer = function(){
     const game_config = $gameTemp.rhythmGame();
-    if(!game_config['Auto Visualizer'])return;
+    if(!game_config['Visualizer'])return;
     const visualizer = new SpriteRhythm_Visualizer();
     this.addChild(visualizer);
 }
@@ -2120,7 +2218,6 @@ SpriteRhythm_Controller.prototype.updateAutoEnd = function(){
     }
     if(this._ended){
         const reserved_buttons = this._auto_spawns;
-        console.log(this._auto_spawns);
         if(reserved_buttons.length > 0){
             this._auto_spawns = [];
             return;
