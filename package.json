@@ -1,9 +1,9 @@
 {
     "name": "rmmz-game",
     "main": "index.html",
-    "chromium-args": "--force-color-profile=srgb",
+    "chromium-args": "--force-color-profile=srgb --disable-devtools",
     "window": {
-        "title": "Syn_Rhythm",
+        "title": "A Very Whimsical Journey",
         "width": 816,
         "height": 624,
         "position": "center",
